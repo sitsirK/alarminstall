@@ -176,7 +176,7 @@ FSTAB = """\
 # systemd remounts by these labels. Device names (sdaNN) are not used: they can change.
 LABEL=archroot  /      ext4  rw,relatime  0 1
 # The ESP: kernel and r8q.dtb. nofail: a problem here must not stop the boot.
-LABEL=R8QESP    /boot  vfat  rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=ascii,shortname=mixed,utf8,errors=remount-ro,nofail  0 2
+LABEL=R8QESP    /boot  vfat  rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=iso8859-1,shortname=mixed,errors=remount-ro,nofail  0 2
 """
 
 
