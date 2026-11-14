@@ -2,9 +2,11 @@ from typing import TYPE_CHECKING, Self, override
 
 from archinstall.default_profiles.desktops.utils import provision_seat_access
 from archinstall.default_profiles.profile import CustomSetting, DisplayServerType, GreeterType, Profile, ProfileType, SelectResult
+from archinstall.lib import r8q
 from archinstall.lib.log import info
 from archinstall.lib.menu.helpers import Selection
 from archinstall.lib.profile.profiles_handler import profile_handler
+from archinstall.lib.r8q.support import apply_tiers, profile_support
 from archinstall.tui.menu_item import MenuItem, MenuItemGroup
 from archinstall.tui.result import ResultType
 
@@ -64,7 +66,12 @@ class DesktopProfile(Profile):
 			for p in profile_handler.get_desktop_profiles()
 		]
 
-		group = MenuItemGroup(items, sort_items=True, sort_case_sensitive=False)
+		sort = True
+		if r8q.active():
+			items = apply_tiers(items, lambda i: profile_support(i.value.name))
+			sort = False
+
+		group = MenuItemGroup(items, sort_items=sort, sort_case_sensitive=False)
 		group.set_selected_by_value(self.current_selection)
 
 		result = await Selection[Self](

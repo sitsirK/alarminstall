@@ -125,6 +125,8 @@ class ArchConfig:
 	timezone: str = 'UTC'
 	services: list[str] = field(default_factory=list)
 	custom_commands: list[str] = field(default_factory=list)
+	# alarminstall: Samsung Galaxy S20 FE 5G (r8q) options, see lib/r8q/
+	r8q_config: Any = None
 
 	def unsafe_config(self) -> dict[ArchConfigType, Any]:
 		config: dict[ArchConfigType, list[UserSerialization] | str | None] = {}

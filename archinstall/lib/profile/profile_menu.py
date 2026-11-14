@@ -1,11 +1,13 @@
 from typing import override
 
 from archinstall.default_profiles.profile import GreeterType, Profile
+from archinstall.lib import r8q
 from archinstall.lib.general.system_menu import select_driver
 from archinstall.lib.hardware import GfxDriver
 from archinstall.lib.menu.abstract_menu import AbstractSubMenu
 from archinstall.lib.menu.helpers import Confirmation, Selection
 from archinstall.lib.models.profile import ProfileConfiguration
+from archinstall.lib.r8q.support import apply_tiers, greeter_support, profile_support
 from archinstall.lib.translationhandler import tr
 from archinstall.tui.menu_item import MenuItem, MenuItemGroup
 from archinstall.tui.result import ResultType
@@ -23,6 +25,9 @@ class ProfileMenu(AbstractSubMenu[ProfileConfiguration]):
 
 		menu_options = self._define_menu_options()
 		self._item_group = MenuItemGroup(menu_options, checkmarks=True)
+
+		if r8q.active():
+			self._disable_gfx_driver()
 
 		super().__init__(
 			self._item_group,
@@ -80,11 +85,25 @@ class ProfileMenu(AbstractSubMenu[ProfileConfiguration]):
 			else:
 				self._item_group.find_by_key('greeter').enabled = True
 				self._item_group.find_by_key('greeter').value = profile.default_greeter_type
+
+				greeter = profile.default_greeter_type
+				if r8q.active() and greeter is not None and not greeter_support(greeter.value).selectable:
+					# e.g. Sway defaults to LightDM, which needs X11: autologin on tty1 instead
+					self._item_group.find_by_key('greeter').value = None
 		else:
 			self._item_group.find_by_key('gfx_driver').value = None
 			self._item_group.find_by_key('greeter').value = None
 
+		if r8q.active():
+			self._disable_gfx_driver()
+
 		return profile
+
+	def _disable_gfx_driver(self) -> None:
+		item = self._item_group.find_by_key('gfx_driver')
+		item.enabled = False
+		item.value = None
+		self._profile_config.gfx_driver = None
 
 	async def _select_gfx_driver(self, preset: GfxDriver | None = None) -> GfxDriver | None:
 		driver = preset
@@ -145,7 +164,11 @@ async def select_greeter(
 ) -> GreeterType | None:
 	if not profile or profile.is_greeter_supported():
 		items = [MenuItem(greeter.value, value=greeter) for greeter in GreeterType]
-		group = MenuItemGroup(items, sort_items=True)
+		sort = True
+		if r8q.active():
+			items = apply_tiers(items, lambda i: greeter_support(i.value.value))
+			sort = False
+		group = MenuItemGroup(items, sort_items=sort)
 
 		default: GreeterType | None = None
 		if preset is not None:
@@ -186,7 +209,11 @@ async def select_profile(
 		header = tr('Select a profile type')
 
 	items = [MenuItem(p.name, value=p) for p in top_level_profiles]
-	group = MenuItemGroup(items, sort_items=True)
+	sort = True
+	if r8q.active():
+		items = apply_tiers(items, lambda i: profile_support(i.value.name))
+		sort = False
+	group = MenuItemGroup(items, sort_items=sort)
 	group.set_selected_by_value(current_profile)
 
 	result = await Selection[Profile](
