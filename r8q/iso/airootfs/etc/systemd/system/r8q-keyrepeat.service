@@ -1,0 +1,10 @@
+[Unit]
+Description=Hold a volume key to scroll in the installer
+After=r8q-keys.service
+
+[Service]
+ExecStart=/usr/local/bin/r8q-keyrepeat
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
