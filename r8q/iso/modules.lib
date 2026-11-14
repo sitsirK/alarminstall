@@ -1,0 +1,10 @@
+# Loadable modules placed in /usr/lib/modules/<kver> (plus their dependencies,
+# resolved from modules.dep). Keep this SHORT: udev cold-plugs whatever it can
+# match, and on this phone the wrong module hard-resets the SoC (qcom_wdt,
+# remoteprocs). Wi-Fi is blacklisted from cold-plug and loaded in order by
+# r8q-wifi.service.
+phy-qcom-qmp-pcie
+pwrseq-qcom-wcn
+pci-pwrctrl-pwrseq
+qrtr-mhi
+ath11k_pci

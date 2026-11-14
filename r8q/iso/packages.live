@@ -1,0 +1,23 @@
+# Live system packages (Arch Linux ARM, aarch64). No kernel package: the r8q
+# kernel and its modules come from the ISO kernel build.
+base
+archlinuxarm-keyring
+nano
+less
+tmux
+terminus-font
+pciutils
+iw
+wireless-regdb
+networkmanager
+openssh
+dosfstools
+e2fsprogs
+arch-install-scripts
+python
+python-textual
+python-pyparted
+python-pydantic
+python-cryptography
+python-markdown-it-py
+python-linkify-it-py

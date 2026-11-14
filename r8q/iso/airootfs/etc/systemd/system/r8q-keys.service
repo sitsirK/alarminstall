@@ -1,0 +1,12 @@
+[Unit]
+Description=Phone keys as Up / Down / Enter on the console
+After=systemd-vconsole-setup.service
+Before=getty@tty1.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/loadkeys /usr/local/share/alarminstall/r8q-keys.map
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+#!/bin/bash
+# tty1: run alarminstall in a tmux session; leaving it drops to a shell in the
+# same session, so the screen never ends up blank.
+tmux has-session -t alarminstall 2>/dev/null ||
+    tmux new-session -d -s alarminstall -x "$(tput cols)" -y "$(tput lines)" \
+        'alarminstall; echo; echo "alarminstall exited. Run alarminstall to start it again."; exec bash -l'
+exec tmux attach -t alarminstall

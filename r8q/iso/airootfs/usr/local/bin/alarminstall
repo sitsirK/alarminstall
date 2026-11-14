@@ -1,0 +1,16 @@
+#!/bin/bash
+# alarminstall: archinstall for the Samsung Galaxy S20 FE 5G (r8q).
+# Waits for the network (Wi-Fi takes a few seconds after boot), then runs the
+# r8q flow. Extra arguments are passed on (e.g. --dry-run, --advanced).
+online() { ping -c1 -W2 1.1.1.1 >/dev/null 2>&1; }
+if ! online; then
+    echo "Waiting for the network (Wi-Fi or USB)..."
+    for i in $(seq 90); do online && break; sleep 1; done
+    if ! online; then
+        echo
+        echo "No network. Connect Wi-Fi with:  nmtui   (or over USB: ssh root@172.16.42.1)"
+        echo "then run alarminstall again."
+        exit 1
+    fi
+fi
+cd /opt/alarminstall && exec python -m archinstall --script r8q --skip-version-check --skip-wifi-check "$@"

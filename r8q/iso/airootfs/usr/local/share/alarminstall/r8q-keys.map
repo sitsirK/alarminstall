@@ -1,0 +1,5 @@
+# The phone's three keys on the Linux console: Vol-Up = Up, Vol-Down = Down,
+# Power = Enter. loadkeys changes only the keycodes listed here.
+keycode 115 = Up
+keycode 114 = Down
+keycode 116 = Return

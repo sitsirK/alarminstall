@@ -1,0 +1,129 @@
+#!/bin/busybox sh
+# alarminstall live initramfs for the Samsung Galaxy S20 FE 5G (r8q).
+#
+# Built INTO the ISO kernel (CONFIG_INITRAMFS_SOURCE), so it works the same
+# whether GRUB on the image, Ventoy's GRUB, or anything else started the kernel.
+# Everything it needs is built in: SD host, iso9660, exfat, vfat, squashfs, loop,
+# overlay. No modules are loaded here.
+#
+# Job: find the live medium, mount its root filesystem image read-only with a
+# tmpfs on top, and hand PID 1 to systemd. The medium is found, in order, as:
+#   1. a block device carrying the ISO9660 volume ALARMINSTALL (the image was
+#      written straight to the card, or Ventoy mapped it to /dev/mapper/ventoy);
+#   2. an alarminstall*.iso FILE on any FAT/exFAT partition of the SD card or a
+#      USB drive (Ventoy's data partition, or a plain card), loop-mounted.
+# On failure it brings up the USB network gadget + telnet (172.16.42.1) and says
+# so on screen: the phone has no keyboard, so the network shell is the lifeline.
+
+BB=/bin/busybox
+$BB --install -s /bin 2>/dev/null
+export PATH=/bin HOME=/ TERM=linux
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || mdev -s
+# Quiet console: every printk is CPU-blitted to simpledrm, the #1 boot-time cost.
+echo "4 4 1 7" > /proc/sys/kernel/printk 2>/dev/null
+
+LABEL=ALARMINSTALL
+SFS=alarminstall/aarch64/airootfs.sfs
+MED=/run/alarminstall/medium
+ISOHOST=/run/alarminstall/isohost
+
+say() { echo "alarminstall: $*"; }
+
+say "kernel $(uname -r) — looking for the live medium"
+mkdir -p /run /newroot
+mount -t tmpfs -o mode=0755,nosuid,nodev run /run
+mkdir -p "$MED" "$ISOHOST"
+
+# The ISO9660 volume id is at byte 32808 (sector 16 + 40), 32 bytes.
+has_label() {
+    [ "$(dd if="$1" bs=1 skip=32808 count=12 2>/dev/null)" = "$LABEL" ]
+}
+
+try_blockdev() {
+    # /dev/vd* only exists under QEMU (virtio), where the image is tested.
+    for dev in /dev/mapper/ventoy /dev/dm-* /dev/mmcblk[0-9] /dev/mmcblk[0-9]p[0-9]* /dev/sd[a-z] /dev/vd[a-z]; do
+        [ -b "$dev" ] || continue
+        case "$dev" in /dev/sd*)
+            # UFS LUNs are sda..sdf; only a USB drive can carry the medium. Skip
+            # anything that is not removable to avoid poking the phone's storage.
+            [ "$(cat /sys/class/block/${dev#/dev/}/removable 2>/dev/null)" = 1 ] || continue ;;
+        esac
+        has_label "$dev" || continue
+        mount -t iso9660 -o ro "$dev" "$MED" 2>/dev/null || continue
+        [ -f "$MED/$SFS" ] && { say "medium: $dev"; return 0; }
+        umount "$MED" 2>/dev/null
+    done
+    return 1
+}
+
+try_isofile() {
+    for dev in /dev/mmcblk[0-9]p[0-9]* /dev/sd[a-z][0-9]*; do
+        [ -b "$dev" ] || continue
+        case "$dev" in /dev/sd*)
+            d=${dev#/dev/}; d=${d%%[0-9]*}
+            [ "$(cat /sys/class/block/$d/removable 2>/dev/null)" = 1 ] || continue ;;
+        esac
+        mount -o ro "$dev" "$ISOHOST" 2>/dev/null || continue
+        iso=$(find "$ISOHOST" -maxdepth 3 -iname 'alarminstall*.iso' 2>/dev/null | sort | tail -1)
+        if [ -n "$iso" ]; then
+            mount -t iso9660 -o ro,loop "$iso" "$MED" 2>/dev/null &&
+            [ -f "$MED/$SFS" ] && { say "medium: $iso on $dev"; return 0; }
+            umount "$MED" 2>/dev/null
+        fi
+        umount "$ISOHOST" 2>/dev/null
+    done
+    return 1
+}
+
+setup_gadget() {
+    UDC=$(ls /sys/class/udc 2>/dev/null | head -1)
+    [ -n "$UDC" ] || return 1
+    mount -t configfs none /sys/kernel/config 2>/dev/null
+    G=/sys/kernel/config/usb_gadget/g1
+    mkdir -p $G/strings/0x409 $G/configs/c.1/strings/0x409 $G/functions/ncm.usb0 || return 1
+    echo 0x1d6b > $G/idVendor; echo 0x0104 > $G/idProduct
+    echo "r8q-alarminstall" > $G/strings/0x409/product
+    echo "Samsung" > $G/strings/0x409/manufacturer
+    echo "r8q0001" > $G/strings/0x409/serialnumber
+    echo "ncm" > $G/configs/c.1/strings/0x409/configuration
+    ln -s $G/functions/ncm.usb0 $G/configs/c.1/ 2>/dev/null
+    echo "$UDC" > $G/UDC || return 1
+    sleep 2
+    ip link set usb0 up; ip addr add 172.16.42.1/24 dev usb0
+    mkdir -p /dev/pts; mount -t devpts devpts /dev/pts 2>/dev/null
+    telnetd -l /bin/sh -b 172.16.42.1 && say "telnet shell on 172.16.42.1"
+}
+
+fail() {
+    echo; say "FAILED: $*"
+    say "the USB network gadget comes up now; from the PC: telnet 172.16.42.1"
+    setup_gadget
+    while true; do sleep 3600; done
+}
+
+# The SD card is up ~0.7 s after boot; a USB drive can take longer. Retry.
+i=0
+until try_blockdev || try_isofile; do
+    i=$((i + 1))
+    [ $i -ge 30 ] && fail "no ALARMINSTALL medium found (no image on the SD card?)"
+    sleep 1
+done
+
+mkdir -p /run/alarminstall/sfs /run/alarminstall/cow
+mount -t squashfs -o ro "$MED/$SFS" /run/alarminstall/sfs || fail "cannot mount $SFS"
+mount -t tmpfs -o mode=0755,size=75% cow /run/alarminstall/cow
+mkdir -p /run/alarminstall/cow/upper /run/alarminstall/cow/work
+mount -t overlay -o lowerdir=/run/alarminstall/sfs,upperdir=/run/alarminstall/cow/upper,workdir=/run/alarminstall/cow/work \
+    airootfs /newroot || fail "cannot mount the overlay root"
+
+# /run (with the medium under /run/alarminstall/medium) moves into the live
+# system as it is; systemd keeps an existing /run tmpfs. The installer reads its
+# package repository from the medium.
+mount --move /run /newroot/run || fail "cannot move /run"
+
+[ -x /newroot/usr/lib/systemd/systemd ] || fail "no systemd in the live root"
+umount /sys /proc 2>/dev/null
+exec switch_root /newroot /usr/lib/systemd/systemd
