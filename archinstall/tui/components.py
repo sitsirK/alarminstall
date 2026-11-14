@@ -43,6 +43,15 @@ def _update_preview(widget: Label, result: str | PreviewResult | None) -> None:
 		widget.update(text)
 
 
+def _portrait[T](location: T) -> T:
+	"""alarminstall: the phone's screen is tall and narrow, so previews go below the list."""
+	from archinstall.lib import r8q
+
+	if r8q.active() and location == 'right':
+		return 'bottom'  # type: ignore[return-value]
+	return location
+
+
 def _translate_bindings(source: BindingsMap | None, target: BindingsMap) -> None:
 	"""Translate binding descriptions from source to target.
 
@@ -251,7 +260,7 @@ class OptionListScreen(BaseScreen[ValueT]):
 		self._group = group
 		self._header = header
 		self._title = title
-		self._preview_location = preview_location
+		self._preview_location = _portrait(preview_location)
 		self._filter = enable_filter
 		self._wrap_preview = wrap_preview
 		self._show_frame = False
@@ -483,7 +492,7 @@ class SelectListScreen(BaseScreen[ValueT]):
 		super().__init__(allow_skip, allow_reset)
 		self._group = group
 		self._header = header
-		self._preview_location = preview_location
+		self._preview_location = _portrait(preview_location)
 		self._show_frame = False
 		self._filter = enable_filter
 		self._wrap_preview = wrap_preview
@@ -520,7 +529,7 @@ class SelectListScreen(BaseScreen[ValueT]):
 
 		for item in self._group.get_enabled_items():
 			is_selected = item in self._selected_items
-			selection = Selection(item.text, item, is_selected)
+			selection = Selection(item.text, item, is_selected, disabled=item.read_only)
 			selections.append(selection)
 
 		return selections
@@ -700,7 +709,7 @@ class ConfirmationScreen(BaseScreen[ValueT]):
 		super().__init__(allow_skip, allow_reset)
 		self._group = group
 		self._header = header
-		self._preview_location = preview_location
+		self._preview_location = _portrait(preview_location)
 		self._preview_header = preview_header
 
 	async def run(self) -> Result[ValueT]:
@@ -1006,7 +1015,7 @@ class TableSelectionScreen(BaseScreen[ValueT]):
 		self._group_callback = group_callback
 		self._loading_header = loading_header
 		self._multi = multi
-		self._preview_location = preview_location
+		self._preview_location = _portrait(preview_location)
 		self._preview_header = preview_header
 
 		self._selected_keys: set[RowKey] = set()
