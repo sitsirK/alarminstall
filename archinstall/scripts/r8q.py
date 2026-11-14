@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from archinstall.lib import r8q
 from archinstall.lib.applications.application_handler import ApplicationHandler
@@ -31,6 +32,24 @@ from archinstall.lib.translationhandler import tr
 from archinstall.tui.components import tui
 
 TITLE = 'alarminstall — Arch Linux ARM for the Samsung Galaxy S20 FE 5G (r8q)'
+
+
+def wait_for_time_sync() -> None:
+	"""
+	pacman checks signatures, so the clock must be right, and the phone has no
+	readable hardware clock. archinstall waits with `timedatectl show`, which fails
+	on the r8q ("Failed to parse bus message", rtc-efi cannot read the RTC); wait
+	for systemd-timesyncd's own marker instead.
+	"""
+	marker = Path('/run/systemd/timesync/synchronized')
+	if marker.exists():
+		return
+	info('alarminstall: waiting for the clock to be set over the network (systemd-timesyncd) ...')
+	for _ in range(120):
+		if marker.exists():
+			return
+		time.sleep(1)
+	error('The clock was not set over the network in 2 minutes; pacman may reject signatures.')
 
 
 def wait_for_keyring() -> None:
@@ -59,7 +78,10 @@ def perform_installation(handler: ArchConfigHandler) -> None:
 
 	with R8qInstaller(TARGET, config.disk_config, base_packages(r8q_config), silent=handler.args.silent) as installation:
 		# ALARM has no archlinux-keyring-wkd-sync: skip that wait (it would never end).
-		installation.sanity_check(handler.args.skip_ntp, skip_wkd=True)
+		# Neither of archinstall's waits works on ALARM / the r8q: see wait_for_time_sync.
+		installation.sanity_check(skip_ntp=True, skip_wkd=True)
+		if not handler.args.skip_ntp:
+			wait_for_time_sync()
 		wait_for_keyring()
 
 		installation.minimal_installation(
