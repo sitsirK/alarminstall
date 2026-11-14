@@ -1,2 +1,4 @@
 iso/out/
 iso/secrets/
+# The top-level .gitignore ignores every *.sh; the image build scripts are wanted.
+!iso/*.sh
