@@ -144,9 +144,13 @@ def profile_names(config: ArchConfig) -> list[str]:
 def _pacman_conf(inst: Installer, gpu: bool) -> None:
 	conf = inst.target / 'etc/pacman.conf'
 	lines = conf.read_text().splitlines()
-	extra = [
-		'# alarminstall (r8q): the r8q kernel has no Landlock, so pacman cannot sandbox downloads.',
-		'DisableSandbox',
+	extra = []
+	if not any(line.strip() == 'DisableSandbox' for line in lines):
+		extra += [
+			'# alarminstall (r8q): the r8q kernel has no Landlock, so pacman cannot sandbox downloads.',
+			'DisableSandbox',
+		]
+	extra += [
 		'# The kernel is linux-r8q from alarminstall, not the generic Arch Linux ARM kernel.',
 		'IgnorePkg = linux-aarch64',
 	]
@@ -165,6 +169,20 @@ def _pacman_conf(inst: Installer, gpu: bool) -> None:
 
 
 # --- steps -------------------------------------------------------------------------
+
+
+FSTAB = """\
+# alarminstall (r8q). The kernel's boot script mounts "userdata" as / by itself;
+# systemd remounts by these labels. Device names (sdaNN) are not used: they can change.
+LABEL=archroot  /      ext4  rw,relatime  0 1
+# The ESP: kernel and r8q.dtb. nofail: a problem here must not stop the boot.
+LABEL=R8QESP    /boot  vfat  rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=ascii,shortname=mixed,utf8,errors=remount-ro,nofail  0 2
+"""
+
+
+def write_fstab(inst: Installer) -> None:
+	"""archinstall's pre-mounted mode writes device paths (/dev/sdb2): replace them with labels."""
+	_write(inst, 'etc/fstab', FSTAB)
 
 
 def install_kernel(inst: Installer, r8q: R8qConfiguration) -> None:

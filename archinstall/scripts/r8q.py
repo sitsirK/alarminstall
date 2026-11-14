@@ -25,7 +25,7 @@ from archinstall.lib.profile.profiles_handler import profile_handler
 from archinstall.lib.r8q import device
 from archinstall.lib.r8q.disk import prepare_target
 from archinstall.lib.r8q.global_menu import TARGET, R8qGlobalMenu, apply_defaults
-from archinstall.lib.r8q.install import R8qInstaller, base_packages, install_kernel, install_r8q_system
+from archinstall.lib.r8q.install import R8qInstaller, base_packages, install_kernel, install_r8q_system, write_fstab
 from archinstall.lib.r8q.models import R8qConfiguration
 from archinstall.lib.translationhandler import tr
 from archinstall.tui.components import tui
@@ -113,6 +113,7 @@ def perform_installation(handler: ArchConfigHandler) -> None:
 			installation.enable_service(services)
 
 		installation.genfstab()
+		write_fstab(installation)
 
 		# Keep a copy of the install log on the new system.
 		if logger.path.exists():
