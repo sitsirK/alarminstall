@@ -3,27 +3,57 @@
 A bootable image that starts straight into **alarminstall**, this fork of
 archinstall, and installs Arch Linux ARM with the r8q kernel onto the phone.
 
+## What you need
+
+- A Galaxy S20 FE 5G (Snapdragon 865, codename r8q) with an unlocked bootloader.
+- **Mu-Silicium with SD-card support** on `BOOT`, built from
+  [sitsirK/Mu-Silicium](https://github.com/sitsirK/Mu-Silicium): branch
+  `sd-card-power` makes the card visible, `sd-card-boot-option` adds the
+  "SD Card" boot-menu entry. Upstream Mu-Silicium does not see the SD card on
+  this phone.
+- A microSD card, Wi-Fi, and for typing the Wi-Fi password: a PC with a USB cable.
+
 ## Using it
 
-Needs a phone that already runs **Mu-Silicium with the SD-card boot option**
-([sitsirK/Mu-Silicium](https://github.com/sitsirK/Mu-Silicium), branches
-`sd-card-power` + `sd-card-boot-option`) on `BOOT`.
-
-1. Write the image to a microSD card (`dd`), or copy the `.iso` onto a Ventoy card.
-2. Reboot, press **Vol-Up** at "[Volume Up] Boot Manager", pick **SD Card**.
-3. The installer comes up on the screen: **Vol-Up / Vol-Down** move, **Power** selects.
-   From a PC, `ssh root@172.16.42.1` (password `root`) and `tmux attach -t alarminstall`
-   gives the same session with a keyboard.
+1. Download the `.iso` from
+   [r8q-arch's Releases](https://github.com/sitsirK/r8q-arch/releases) and
+   check it against `SHA256SUMS`.
+2. Write it to a microSD card (`dd`), or copy it onto a Ventoy card (several
+   versions side by side are fine).
+3. Reboot, press **Vol-Up** at "[Volume Up] Boot Manager", pick **SD Card**.
+4. The installer comes up on the screen: **Vol-Up / Vol-Down** move (hold to
+   scroll), **Power** selects.
 
 Installing **erases the `userdata` partition** (Android, or a previous Linux) and
 reformats `cache` as the EFI system partition. The partition table is not changed.
 
-Test-build defaults: hostname `alarm`, root password `alarm`, user `alarm` / `alarm`.
+## Getting online
+
+The installer downloads packages. The phone has no keyboard, so connect from a
+PC over USB (it gets an address from the phone; the bar at the bottom of the
+screen shows where to connect):
+
+```
+ssh root@172.16.42.1                 # password root; the host key changes every boot
+nmtui                                # or: nmcli dev wifi connect "NAME" password "PASSWORD"
+tmux attach -t alarminstall          # the installer, now with a keyboard
+```
+
+If the installer gave up waiting for the network, type `alarminstall` there.
+The Wi-Fi network is copied to the installed system. A Linux PC can also share
+its own connection over the cable with r8q-arch's
+[`scripts/host-tether.sh`](https://github.com/sitsirK/r8q-arch/blob/main/scripts/host-tether.sh).
+
+## After installing
+
+Hostname `alarm`, root password `alarm`, user `alarm` / `alarm` (sudo). With
+"SSH over USB" on, root can log in with that password over USB and Wi-Fi:
+change both passwords (`passwd`).
 
 ## What is supported
 
 Choices are marked in the menus: plain = tested on the phone, yellow = untested,
-struck through = not supported yet (cannot be selected). The table is
+red and struck through = not supported yet (cannot be selected). The table is
 `archinstall/lib/r8q/support.py`.
 
 ## Building

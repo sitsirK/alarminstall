@@ -1,3 +1,8 @@
+> [!NOTE]
+> **This is alarminstall**, a fork of archinstall that installs Arch Linux ARM on the
+> Samsung Galaxy S20 FE 5G (r8q). Start at [`r8q/README.md`](r8q/README.md); the
+> bootable image is in [r8q-arch's Releases](https://github.com/sitsirK/r8q-arch/releases). The rest of this page is upstream archinstall's.
+
 <!-- <div align="center"> -->
 <img src="https://github.com/archlinux/archinstall/raw/master/docs/logo.png" alt="drawing" width="200"/>
 
