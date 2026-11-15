@@ -127,16 +127,17 @@ class R8qMenu(AbstractSubMenu[R8qConfiguration]):
 				key='wedge_mitigation',
 			),
 			MenuItem(
-				'Charge at 700 mA',
+				'PC USB port: draw 700 mA',
 				value=c.charge_limit,
 				action=lambda p: _yes_no(
-					'Raise the USB charge limit from 500 to 700 mA?\n\n'
-					'Mainline cannot detect the charger type, so it\n'
-					'stays at 500 mA and a desktop drains the battery\n'
-					'even while plugged in. Recommended.\n',
+					"Draw 700 mA from a PC's USB port?\n\n"
+					'The USB spec allows 500 mA there: less than a\n'
+					'running desktop uses, so the battery drains while\n'
+					'plugged in. Wall chargers are detected and get\n'
+					'1.5 A or more either way. Recommended.\n',
 					p,
 				),
-				preview_action=lambda i: f'USB input limit 700 mA: {yn(i.value)}',
+				preview_action=lambda i: f'PC USB port at 700 mA: {yn(i.value)}\n\nWall chargers are detected (1.5 A or more).',
 				key='charge_limit',
 			),
 			MenuItem(

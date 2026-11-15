@@ -6,11 +6,12 @@ Every choice alarminstall offers is in one of three tiers:
 - TESTED       works on the phone today.
 - UNTESTED     nothing known stops it, but nobody has tried it yet. Selectable,
                marked in yellow.
-- UNSUPPORTED  known not to work yet. Shown struck through with the reason and
-               NOT selectable.
+- UNSUPPORTED  known not to work yet. Shown in red, struck through, with the
+               reason, and NOT selectable.
 
-The Linux console on the phone cannot draw struck-through text, so the reason is
-always written out as well. Over SSH (tmux attach) the strike shows.
+The Linux console on the phone cannot draw struck-through text, so the line is
+also red and the reason is always written out. Over SSH (tmux attach) the strike
+shows as well.
 """
 
 from collections.abc import Callable
@@ -49,7 +50,9 @@ class Support:
 			case Tier.UNTESTED:
 				return f'{text} [yellow]— {note or "untested"}[/]'
 			case Tier.UNSUPPORTED:
-				return f'[strike]{text}[/strike] [dim]— {note or "not supported yet"}[/]'
+				# Red as well as struck: the phone's console drops the strike
+				# (and tmux shares one picture between the phone and SSH).
+				return f'[red][strike]{text}[/strike] — {note or "not supported yet"}[/red]'
 
 
 TESTED = Support(Tier.TESTED)

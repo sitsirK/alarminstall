@@ -88,6 +88,6 @@ class R8qConfiguration(SubConfig):
 			f'Camera: {yn(self.camera)}',
 			f'SSH over USB: {yn(self.usb_ssh)}',
 			f'CPU-wedge mitigation: {yn(self.wedge_mitigation)}',
-			f'Charge at 700 mA: {yn(self.charge_limit)}',
+			f'PC USB port at 700 mA: {yn(self.charge_limit)}',
 			f'Copy Wi-Fi networks: {yn(self.copy_wifi)}',
 		]

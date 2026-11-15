@@ -7,6 +7,7 @@ The kernel, its modules and the r8q files come from the live medium
 (device.PAYLOAD): the same kernel and files the phone was tested with.
 """
 
+import re
 import shutil
 import subprocess
 import tarfile
@@ -261,7 +262,12 @@ def install_r8q_system(inst: Installer, config: ArchConfig, r8q: R8qConfiguratio
 	_chroot(inst, 'systemctl', 'disable', 'NetworkManager-wait-online.service')
 
 	if not r8q.charge_limit:
-		_write(inst, 'etc/systemd/system/r8q-battery.service.d/no-charge-limit.conf', '[Service]\nExecStartPost=\n')
+		# PC ports at the USB spec's 500 mA: load max77705_usbc without its sdp_ua= override.
+		unit = inst.target / 'etc/systemd/system/r8q-battery.service'
+		text = unit.read_text()
+		if ' sdp_ua=' not in text:
+			warn('r8q: r8q-battery.service sets no sdp_ua=, nothing to undo')
+		unit.write_text(re.sub(r' sdp_ua=\d+', '', text))
 
 	match r8q.touch:
 		case TouchChip.AUTO:
