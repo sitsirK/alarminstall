@@ -8,3 +8,4 @@ zinitix
 max17042_battery
 max77705
 max77705_charger
+max77705_usbc
