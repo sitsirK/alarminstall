@@ -32,6 +32,15 @@ ISOHOST=/run/alarminstall/isohost
 
 say() { echo "alarminstall: $*"; }
 
+# The image's ID (mkimage.sh), passed by its grub.cfg as alarminstall.id=. With
+# several images on one card (Ventoy) this picks the one GRUB started from, not
+# just the newest name. Without it, any image will do.
+ID=$(sed -n 's/.*alarminstall\.id=\([^ ]*\).*/\1/p' /proc/cmdline)
+is_ours() {
+    [ -f "$MED/$SFS" ] || return 1
+    [ -z "$ID" ] || [ "$(cat "$MED/alarminstall/id" 2>/dev/null)" = "$ID" ]
+}
+
 say "kernel $(uname -r) — looking for the live medium"
 mkdir -p /run /newroot
 mount -t tmpfs -o mode=0755,nosuid,nodev run /run
@@ -53,7 +62,7 @@ try_blockdev() {
         esac
         has_label "$dev" || continue
         mount -t iso9660 -o ro "$dev" "$MED" 2>/dev/null || continue
-        [ -f "$MED/$SFS" ] && { say "medium: $dev"; return 0; }
+        is_ours && { say "medium: $dev"; return 0; }
         umount "$MED" 2>/dev/null
     done
     return 1
@@ -67,12 +76,13 @@ try_isofile() {
             [ "$(cat /sys/class/block/$d/removable 2>/dev/null)" = 1 ] || continue ;;
         esac
         mount -o ro "$dev" "$ISOHOST" 2>/dev/null || continue
-        iso=$(find "$ISOHOST" -maxdepth 3 -iname 'alarminstall*.iso' 2>/dev/null | sort | tail -1)
-        if [ -n "$iso" ]; then
-            mount -t iso9660 -o ro,loop "$iso" "$MED" 2>/dev/null &&
-            [ -f "$MED/$SFS" ] && { say "medium: $iso on $dev"; return 0; }
+        # Newest name first; with an ID only the matching image is taken.
+        find "$ISOHOST" -maxdepth 3 -iname 'alarminstall*.iso' 2>/dev/null | sort -r > /run/alarminstall/isos
+        while read -r iso; do
+            mount -t iso9660 -o ro,loop "$iso" "$MED" 2>/dev/null || continue
+            is_ours && { say "medium: $iso on $dev"; return 0; }
             umount "$MED" 2>/dev/null
-        fi
+        done < /run/alarminstall/isos
         umount "$ISOHOST" 2>/dev/null
     done
     return 1
@@ -108,7 +118,7 @@ fail() {
 i=0
 until try_blockdev || try_isofile; do
     i=$((i + 1))
-    [ $i -ge 30 ] && fail "no ALARMINSTALL medium found (no image on the SD card?)"
+    [ $i -ge 30 ] && fail "no ALARMINSTALL medium found${ID:+ with id $ID} (no image on the SD card?)"
     sleep 1
 done
 

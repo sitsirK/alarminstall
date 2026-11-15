@@ -22,10 +22,14 @@ unsquashfs -s "$I/alarminstall/aarch64/airootfs.sfs" >/dev/null || { echo "airoo
 mkdir -p "$I/boot/grub" "$W/efi"
 install -m644 "$SRC/Image" "$I/boot/Image"
 install -m644 "$SRC/r8q.dtb" "$I/boot/r8q.dtb"
-install -m644 "$SRC/grub/grub.cfg" "$I/boot/grub/grub.cfg"
+# A per-build ID, in grub.cfg (kernel command line) and in the image: the live
+# /init takes the image whose ID matches (several images on one Ventoy card).
+ID=$(date -u +%Y%m%d%H%M%S)
+sed "s/@ID@/$ID/" "$SRC/grub/grub.cfg" > "$I/boot/grub/grub.cfg"
 # What alarminstall installs: kernel, device tree, modules, r8q files.
 rm -rf "$I/alarminstall/r8q"; mkdir -p "$I/alarminstall"
 cp -a "$SRC/payload" "$I/alarminstall/r8q"
+echo "$ID" > "$I/alarminstall/id"
 
 echo "== GRUB (arm64-efi, standalone)"
 grub-mkstandalone -O arm64-efi -o "$W/efi/BOOTAA64.EFI" \

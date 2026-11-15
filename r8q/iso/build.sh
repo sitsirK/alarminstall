@@ -22,7 +22,8 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 TOP=$(cd "$HERE/../.." && pwd)
-R8Q=${R8Q:-/home/sitsirk/r8q-linux}
+# The work directory holding this checkout, kernel-work/, repo/ (r8q-arch) and tools/.
+R8Q=${R8Q:-$(cd "$TOP/.." && pwd)}
 KSRC=${KSRC:-$R8Q/kernel-work/linux-7.1.2}
 KOUT_MAIN=${KOUT_MAIN:-$R8Q/kernel-work/out}
 KOUT=${KOUT:-$R8Q/kernel-work/out-iso}
@@ -47,6 +48,11 @@ do_initramfs() {
 
 do_kernel() {
     log "ISO kernel ($KOUT)"
+    # An option new to this config would be prompted for, read EOF and end up off
+    # (it happened with TYPEC_MAX77705): set new options first, as in the phone's config.
+    local new
+    new=$(make -s -C "$KSRC" O="$KOUT" ARCH=arm64 LLVM=1 listnewconfig)
+    [ -z "$new" ] || { echo "$KOUT/.config has unset new options:"; echo "$new"; exit 1; }
     make -C "$KSRC" O="$KOUT" ARCH=arm64 LLVM=1 -j"$(nproc)" Image modules
 }
 
@@ -140,7 +146,8 @@ do_stage() {
 
 do_push() {
     log "push -> phone:$RDIR/src"
-    tar -C "$STAGE" -cf - . | "$PHONE" "rm -rf $RDIR/src && mkdir -p $RDIR/src && tar -C $RDIR/src -xf -"
+    # Owned by root on the phone: the live system is copied from here with cp -a.
+    tar -C "$STAGE" --owner=0 --group=0 --numeric-owner -cf - . | "$PHONE" "rm -rf $RDIR/src && mkdir -p $RDIR/src && tar -C $RDIR/src -xf -"
 }
 
 # Long jobs run as transient units on the phone, so a dropped USB link does not
