@@ -8,7 +8,10 @@ if ! online; then
     for i in $(seq 90); do online && break; sleep 1; done
     if ! online; then
         echo
-        echo "No network. Connect Wi-Fi with:  nmtui   (or over USB: ssh root@172.16.42.1)"
+        echo "No network. Connect Wi-Fi with a keyboard, or from a PC over USB"
+        echo "(ssh root@172.16.42.1, password root):"
+        echo "    nmtui"
+        echo "    nmcli dev wifi connect \"NAME\" password \"PASSWORD\""
         echo "then run alarminstall again."
         exit 1
     fi

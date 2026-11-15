@@ -1,0 +1,4 @@
+#!/bin/sh
+# For the tmux status bar: where to SSH to this phone (password root).
+a=$(ip -4 -o addr show 2>/dev/null | awk '$2 != "lo" { sub("/.*", "", $4); s = s (s ? " or " : "") $4 } END { print s }')
+[ -n "$a" ] && echo "ssh root@$a" || echo "no network: nmtui"

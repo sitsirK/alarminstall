@@ -1,0 +1,9 @@
+#!/bin/sh
+# The live installer uses NetworkManager, not iwd.
+cat >&2 <<'MSG'
+This image uses NetworkManager, not iwd. Connect Wi-Fi with:
+    nmtui                                              (menus)
+    nmcli dev wifi connect "NAME" password "PASSWORD"  (one command)
+then run: alarminstall
+MSG
+exit 1
