@@ -285,6 +285,9 @@ def install_r8q_system(inst: Installer, config: ArchConfig, r8q: R8qConfiguratio
 		_put(inst, 'etc/systemd/network/20-usb0.network')
 		_put(inst, 'etc/systemd/system/r8q-usb-gadget.service')
 		_put(inst, 'usr/local/sbin/r8q-usb-gadget-up.sh', 0o755)
+		# The gadget script closes the MAX77705 USB data switch over i2c; without
+		# it the host needs a cable replug after every reboot.
+		inst.add_additional_packages(['i2c-tools'])
 		_write(inst, 'etc/ssh/sshd_config.d/50-r8q.conf', SSHD)
 		_enable(inst, 'r8q-usb-gadget.service', 'systemd-networkd.service', 'systemd-networkd.socket', 'sshd.service')
 		_chroot(inst, 'systemctl', 'disable', 'systemd-networkd-wait-online.service')

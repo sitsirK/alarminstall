@@ -21,3 +21,4 @@ python-pydantic
 python-cryptography
 python-markdown-it-py
 python-linkify-it-py
+i2c-tools
