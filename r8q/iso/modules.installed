@@ -1,10 +1,12 @@
-# Modules in the installed system's /usr/lib/modules/<kver>: exactly the set the
-# phone runs today (taken from it 2026-11-15). Everything that must not cold-plug
-# is blacklisted in r8q-arch's rootfs/etc/modprobe.d and loaded by a service.
+# Modules in the installed system's /usr/lib/modules/<kver>: the set the phone
+# runs (taken from it 2026-11-15), plus the msm-drm display's panel driver,
+# backlight and the DSI refgen regulator (2026-11-20). Everything that must not
+# cold-plug is blacklisted in r8q-arch's rootfs/etc/modprobe.d and loaded by a service.
 ak7375
 apr
 ath11k
 ath11k_pci
+backlight
 camcc-sm8250
 cec
 cfg80211
@@ -25,6 +27,7 @@ mhi
 msm
 netconsole
 ocmem
+panel-samsung-s6e3fc3
 pci-pwrctrl-pwrseq
 pdr_interface
 phy-qcom-qmp-pcie
@@ -45,6 +48,7 @@ q6prm-clocks
 q6routing
 q6usb
 qcom-camss
+qcom-refgen-regulator
 qcom_common
 qcom_glink_smem
 qcom_pd_mapper

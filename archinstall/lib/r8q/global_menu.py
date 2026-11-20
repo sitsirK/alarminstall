@@ -17,7 +17,7 @@ from archinstall.lib.models.network import NetworkConfiguration, NicType
 from archinstall.lib.models.users import Password, User
 from archinstall.lib.r8q import device, menu
 from archinstall.lib.r8q.models import R8qBootloader, R8qConfiguration
-from archinstall.lib.r8q.support import SWAP
+from archinstall.lib.r8q.support import KERNEL_LABELS, LATEST_KERNEL, SWAP
 from archinstall.tui.menu_item import MenuItem, MenuItemGroup
 from archinstall.tui.result import ResultType
 
@@ -47,9 +47,10 @@ def disk_layout() -> DiskLayoutConfiguration:
 
 def apply_defaults(config: ArchConfig) -> None:
 	"""Fill in the r8q's answers before the menu shows them."""
-	config.r8q_config = config.r8q_config or R8qConfiguration()
+	config.r8q_config = config.r8q_config or R8qConfiguration(display=menu.default_display())
 	config.disk_config = disk_layout()
-	config.kernels = ['linux-r8q']
+	# linux-r8q (the tested kernel on the medium) unless the EXPERIMENTAL latest kernel was picked.
+	config.kernels = [LATEST_KERNEL] if config.kernels and LATEST_KERNEL in config.kernels else ['linux-r8q']
 	config.swap = None
 	config.bootloader_config = BootloaderConfiguration(Bootloader.Efistub, uki=False, removable=True)
 	if config.hostname in ('archlinux', '', None):
@@ -96,6 +97,7 @@ class R8qGlobalMenu(GlobalMenu):
 		k = by_key['kernels']
 		k.value = ['linux-r8q']
 		k.action = menu.select_kernel
+		k.preview_action = self._prev_r8q_kernel
 
 		f = by_key['firmware_optdeps']
 		f.action = menu.select_firmware_optdeps
@@ -121,6 +123,17 @@ class R8qGlobalMenu(GlobalMenu):
 			if device.charging():
 				text += ' (charging)'
 		return text
+
+	def _prev_r8q_kernel(self, item: MenuItem) -> str | None:
+		kernels: list[str] = item.value or ['linux-r8q']
+		tested = f'linux-r8q: mainline {device.bundled_kernel_release()} + r8q patches (tested)'
+		if LATEST_KERNEL in kernels:
+			return (
+				f'Kernel: {KERNEL_LABELS[LATEST_KERNEL]} (EXPERIMENTAL)\n\n'
+				'The newest kernel.org release, patched and built on the\n'
+				'phone at the end of the install (30-60 min). If that fails:\n' + tested
+			)
+		return f'Kernel: {tested}'
 
 	# --- disk ----------------------------------------------------------------
 

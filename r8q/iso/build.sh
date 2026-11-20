@@ -15,19 +15,22 @@
 #   ./build.sh image            make the bootable image on the phone
 #   ./build.sh pull             copy the image back to out/
 #
-# Env: R8Q (project dir), KSRC, KOUT (ISO kernel build dir), KOUT_MAIN (the
-#      installed kernel's build dir, as running on the phone), KDTB (device tree),
-#      REPO (r8q-arch checkout), WITH_WIFI=1 (put the phone's Wi-Fi profiles in
-#      the image: for private test builds only).
+# Env: R8Q (project dir), KVER (kernel version, picks the trees below), KSRC,
+#      KOUT (ISO kernel build dir), KOUT_MAIN (the installed kernel's build dir, as
+#      running on the phone), KDTB / KDTB_SIMPLEDRM (device trees: msm-drm display /
+#      firmware framebuffer), REPO (r8q-arch checkout), WITH_WIFI=1 (put the phone's
+#      Wi-Fi profiles in the image: for private test builds only).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 TOP=$(cd "$HERE/../.." && pwd)
 # The work directory holding this checkout, kernel-work/, repo/ (r8q-arch) and tools/.
 R8Q=${R8Q:-$(cd "$TOP/.." && pwd)}
-KSRC=${KSRC:-$R8Q/kernel-work/linux-7.1.2}
-KOUT_MAIN=${KOUT_MAIN:-$R8Q/kernel-work/out}
-KOUT=${KOUT:-$R8Q/kernel-work/out-iso}
-KDTB=${KDTB:-$R8Q/kernel-work/out/arch/arm64/boot/dts/qcom/sm8250-samsung-r8q.dtb}
+KVER=${KVER:-7.3.5}
+KSRC=${KSRC:-$R8Q/kernel-work/linux-$KVER}
+KOUT_MAIN=${KOUT_MAIN:-$R8Q/kernel-work/out-$KVER}
+KOUT=${KOUT:-$R8Q/kernel-work/out-iso-$KVER}
+KDTB=${KDTB:-$KOUT_MAIN/arch/arm64/boot/dts/qcom/sm8250-samsung-r8q.dtb}
+KDTB_SIMPLEDRM=${KDTB_SIMPLEDRM:-$KOUT_MAIN/arch/arm64/boot/dts/qcom/sm8250-samsung-r8q-simpledrm.dtb}
 IRFS=${IRFS:-$R8Q/kernel-work/iso-irfs}
 BUSYBOX=${BUSYBOX:-$R8Q/kernel-work/irfs/bin/busybox}
 REPO=${REPO:-$R8Q/repo}
@@ -106,9 +109,10 @@ do_stage() {
     log "stage -> $STAGE"
     rm -rf "$STAGE"; mkdir -p "$STAGE"
 
-    # The live system: ISO kernel, Wi-Fi modules only.
+    # The live system: ISO kernel, Wi-Fi modules only. It runs on the firmware's
+    # framebuffer (simpledrm device tree): that works with every panel.
     install -m644 "$KOUT/arch/arm64/boot/Image" "$STAGE/Image"
-    install -m644 "$KDTB" "$STAGE/r8q.dtb"
+    install -m644 "$KDTB_SIMPLEDRM" "$STAGE/r8q.dtb"
     stage_modules "$KOUT" "$HERE/modules.lib" "$STAGE/modules"
 
     # The installed system (alarminstall copies it from the medium's alarminstall/r8q/):
@@ -117,11 +121,32 @@ do_stage() {
     local p=$STAGE/payload
     mkdir -p "$p"
     install -m644 "$KOUT_MAIN/arch/arm64/boot/Image" "$p/Image"
+    # Display menu: r8q.dtb = msm-drm + the S6E3FC3 panel, r8q-simpledrm.dtb = the
+    # firmware framebuffer. The same kernel runs with either.
     install -m644 "$KDTB" "$p/r8q.dtb"
+    install -m644 "$KDTB_SIMPLEDRM" "$p/r8q-simpledrm.dtb"
     cp "$KOUT_MAIN/include/config/kernel.release" "$p/kernel.release"
     stage_modules "$KOUT_MAIN" "$HERE/modules.installed" "$OUT/installed-modules"
     tar -C "$OUT/installed-modules" --owner=0 --group=0 -cf "$p/modules.tar" usr root
     cp -a "$REPO/rootfs" "$p/rootfs"
+
+    # EXPERIMENTAL "latest kernel" (Kernels menu): what r8q-kernel-latest needs to
+    # build a newer kernel on the phone the way this one was built: the r8q patches
+    # and device tree (r8q-arch), this kernel's configuration, the switch-root
+    # initramfs, and the module lists.
+    local k=$p/kernel-src
+    mkdir -p "$k"
+    install -m755 "$HERE/../kernel/r8q-kernel-latest" "$k/r8q-kernel-latest"
+    cp -a "$REPO/patches" "$k/patches"
+    mkdir -p "$k/dts"; cp "$REPO"/dts/*.dts "$REPO"/dts/*.dtsi "$k/dts/"
+    install -m644 "$KOUT_MAIN/.config" "$k/config"
+    local irfs; irfs=$(sed -n 's/^CONFIG_INITRAMFS_SOURCE="\([^ "]*\) \([^"]*\)"$/\1 \2/p' "$KOUT_MAIN/.config")
+    [ -n "$irfs" ] || { echo "no INITRAMFS_SOURCE in $KOUT_MAIN/.config"; exit 1; }
+    cp -a "${irfs% *}" "$k/irfs"; cp "${irfs#* }" "$k/irfs.devnodes"
+    install -m644 "$HERE/modules.installed" "$HERE/modules.ts" "$k/"
+    # Every module the installed system carries (the list's dependencies included), so
+    # the on-phone build keeps them all (localmodconfig).
+    find "$OUT/installed-modules" -name '*.ko*' -printf '%f\n' | sed 's/\.ko.*//' | sort -u > "$k/modules.wanted"
 
     # r8q files shared with the installed system (one source of truth: r8q-arch).
     local rf=$STAGE/r8q-rootfs

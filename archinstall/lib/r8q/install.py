@@ -19,7 +19,7 @@ from archinstall.lib.installer import Installer
 from archinstall.lib.log import info, warn
 from archinstall.lib.models.device import DiskLayoutConfiguration
 from archinstall.lib.r8q import device
-from archinstall.lib.r8q.models import R8qBootloader, R8qConfiguration, TouchChip
+from archinstall.lib.r8q.models import Display, R8qBootloader, R8qConfiguration, TouchChip
 
 # Always installed: Wi-Fi (firmware, NetworkManager, setpci for r8q-wifi.service), SSH, filesystems.
 BASE_PACKAGES = [
@@ -66,14 +66,27 @@ PasswordAuthentication yes
 SWAY_PROFILE = """\
 [ -f ~/.bashrc ] && . ~/.bashrc
 # alarminstall (r8q): start sway on the tty1 autologin console (ssh sessions are unaffected).
-# r8q-gpu.service loads msm after multi-user, so wait for the render node; without
-# it sway renders on the CPU (pixman).
+# r8q-gpu.service loads msm after multi-user, so wait for the render node (and, with the
+# msm-drm display, for msm's display card); without the GPU sway renders on the CPU (pixman).
+drm_card() {  # the DRM card whose driver is $1 (card numbers change as simpledrm goes away)
+    for c in /sys/class/drm/card[0-9]*; do
+        [ "$(basename "$(readlink -f "$c/device/driver")")" = "$1" ] && { echo /dev/dri/${c##*/}; return; }
+    done
+}
 if [ -z "$WAYLAND_DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
-    for i in $(seq 1 30); do [ -e /dev/dri/renderD128 ] && break; [ -e /etc/alarminstall/no-gpu ] && break; sleep 1; done
+    for i in $(seq 1 30); do
+        gpu_ok=; disp_ok=
+        { [ -e /dev/dri/renderD128 ] || [ -e /etc/alarminstall/no-gpu ]; } && gpu_ok=1
+        { [ ! -e /etc/alarminstall/display-msm ] || [ -n "$(drm_card msm_dpu)" ]; } && disp_ok=1
+        [ -n "$gpu_ok" ] && [ -n "$disp_ok" ] && break
+        sleep 1
+    done
     export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-    export WLR_DRM_DEVICES=/dev/dri/card0
+    # Scan out on msm's display (msm-drm) or on the bootloader's framebuffer (simpledrm).
+    card=$(drm_card msm_dpu); [ -n "$card" ] || card=$(drm_card simple-framebuffer)
+    [ -n "$card" ] && export WLR_DRM_DEVICES=$card
     if [ -e /dev/dri/renderD128 ]; then
-        # Render on the Adreno 650 (turnip), scan out on simpledrm card0.
+        # Render on the Adreno 650 (turnip).
         export WLR_RENDER_DRM_DEVICE=/dev/dri/renderD128
         export WLR_RENDERER=vulkan
     else
@@ -81,6 +94,14 @@ if [ -z "$WAYLAND_DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
     fi
     exec sway > /tmp/sway.log 2>&1
 fi
+"""
+
+# r8q-gpu.service waits up to 10 s for msm's display card; with simpledrm there is none.
+GPU_SIMPLEDRM_DROPIN = """\
+# alarminstall (r8q): display = simpledrm. The device tree leaves the display engine to
+# the firmware framebuffer, so msm only drives the GPU: no display card to wait for.
+[Service]
+ExecStartPost=
 """
 
 
@@ -169,6 +190,14 @@ def _pacman_conf(inst: Installer, gpu: bool) -> None:
 	conf.write_text('\n'.join(out) + '\n')
 
 
+R8Q_KERNEL_CONF = """\
+# alarminstall (r8q). Read by r8q-kernel-latest.
+# R8Q_DISPLAY: msm (r8q.dtb: msm-drm + S6E3FC3 panel driver) or simpledrm (r8q-simpledrm.dtb).
+R8Q_DISPLAY={display}
+# The tested kernel alarminstall installed; kept on the ESP when a newer one is built.
+TESTED_KERNEL={kernel}
+"""
+
 # --- steps -------------------------------------------------------------------------
 
 
@@ -190,7 +219,10 @@ def install_kernel(inst: Installer, r8q: R8qConfiguration) -> None:
 	"""The r8q kernel, its device tree and its (pruned) module tree, from the medium."""
 	boot = inst.target / 'boot'
 	image = device.PAYLOAD / 'Image'
-	dtb = device.PAYLOAD / 'r8q.dtb'
+	# Two device trees on the medium: r8q.dtb enables the display engine and the S6E3FC3
+	# panel (msm-drm); r8q-simpledrm.dtb leaves the screen to the firmware framebuffer.
+	# The same kernel works with either.
+	dtb = device.PAYLOAD / ('r8q.dtb' if r8q.display == Display.MSM else 'r8q-simpledrm.dtb')
 
 	# The kernel's built-in command line says dtb=r8q.dtb: the device tree must be at the
 	# root of the ESP, next to whatever starts the kernel. Without it the phone does not boot.
@@ -309,10 +341,19 @@ def install_r8q_system(inst: Installer, config: ArchConfig, r8q: R8qConfiguratio
 	if r8q.gpu:
 		inst.add_additional_packages(GPU_PACKAGES)
 		copy_zap_shader(inst)
-		_put(inst, 'etc/systemd/system/r8q-gpu.service')
-		_enable(inst, 'r8q-gpu.service')
 	else:
 		_write(inst, 'etc/alarminstall/no-gpu', 'GPU acceleration was not installed.\n')
+
+	# r8q-gpu.service loads msm once per boot: the Adreno, and with msm-drm also the display.
+	if r8q.gpu or r8q.display == Display.MSM:
+		_put(inst, 'etc/systemd/system/r8q-gpu.service')
+		_enable(inst, 'r8q-gpu.service')
+	if r8q.display == Display.MSM:
+		_write(inst, 'etc/alarminstall/display-msm', 'The display is driven by msm-drm (r8q.dtb with the display block).\n')
+	elif r8q.gpu:
+		_write(inst, 'etc/systemd/system/r8q-gpu.service.d/simpledrm.conf', GPU_SIMPLEDRM_DROPIN)
+	# Read by r8q-kernel-latest: which device tree to build and install.
+	_write(inst, 'etc/r8q-kernel.conf', R8Q_KERNEL_CONF.format(display=r8q.display.value, kernel=device.bundled_kernel_release()))
 
 	if r8q.camera:
 		inst.add_additional_packages(CAMERA_PACKAGES + (['plasma-camera'] if 'Plasma Mobile' in names else []))
@@ -343,8 +384,8 @@ def _desktop(inst: Installer, names: list[str], desktop: bool, user: str | None,
 		sddm = (device.PAYLOAD / 'rootfs/etc/sddm.conf.d/10-r8q.conf').read_text()
 		sddm = sddm.replace('User=alarm', f'User={user or "root"}').replace('Session=plasma-mobile.desktop', f'Session={session}')
 		_write(inst, 'etc/sddm.conf.d/10-r8q.conf', sddm)
-		if r8q.gpu:
-			# KWin picks its render device once: sddm must start after the GPU is up.
+		if r8q.gpu or r8q.display == Display.MSM:
+			# KWin picks its render device and display once: sddm must start after msm is up.
 			_put(inst, 'etc/systemd/system/sddm.service.d/r8q-after-gpu.conf')
 
 	if 'GNOME' in names:
@@ -355,7 +396,10 @@ def _desktop(inst: Installer, names: list[str], desktop: bool, user: str | None,
 		_write(inst, 'etc/gdm/custom.conf', gdm)
 		if r8q.gpu:
 			_put(inst, 'etc/udev/rules.d/61-mutter-primary-gpu.rules')
+		if r8q.gpu or r8q.display == Display.MSM:
 			_put(inst, 'etc/systemd/system/gdm.service.d/r8q-after-gpu.conf')
+		if r8q.display == Display.MSM:
+			warn('r8q: GNOME on the msm-drm display is untested (tested: Plasma Mobile)')
 
 	if 'Sway' in names and user:
 		_write(
@@ -371,3 +415,60 @@ def _desktop(inst: Installer, names: list[str], desktop: bool, user: str | None,
 		_put(inst, 'etc/systemd/system/getty@tty1.service.d/autologin.conf')
 	elif not any(n in names for n in ('Plasma Mobile', 'KDE Plasma', 'GNOME')):
 		warn(f'r8q: no r8q configuration for {names}: untested, the session may not start')
+
+
+# --- EXPERIMENTAL: the latest kernel, built on the phone ----------------------------
+#
+# "latest kernel" in the Kernels menu (support.LATEST_KERNEL). The tested kernel from
+# the medium is always installed first (install_kernel); this runs as the very last
+# step and only replaces it when everything worked: the newest kernel.org release
+# downloaded, every r8q patch applied, the build finished and every module the phone
+# needs was built. Otherwise the tested kernel stays and the install still succeeds.
+# The script (r8q/kernel/r8q-kernel-latest) stays on the new system so the user can
+# run it again for a later release.
+
+LATEST_BUILD_PACKAGES = ['base-devel', 'bc', 'clang', 'lld', 'llvm', 'python', 'perl', 'openssl', 'libelf', 'cpio', 'curl', 'gnupg']
+LATEST_SHARE = 'usr/local/share/r8q-kernel'
+LATEST_LOG = 'var/log/r8q-kernel-latest.log'
+
+
+def build_latest_kernel(inst: Installer) -> bool:
+	"""EXPERIMENTAL. Returns True when the newly built kernel was installed."""
+	src = device.PAYLOAD / 'kernel-src'
+	if not (src / 'r8q-kernel-latest').exists():
+		warn('r8q: this medium has no r8q-kernel-latest: keeping the tested kernel')
+		return False
+
+	info('r8q: EXPERIMENTAL latest kernel: build tools')
+	inst.add_additional_packages(LATEST_BUILD_PACKAGES)
+
+	share = inst.target / LATEST_SHARE
+	shutil.rmtree(share, ignore_errors=True)
+	shutil.copytree(src, share, symlinks=True, ignore=shutil.ignore_patterns('r8q-kernel-latest'))
+	sbin = inst.target / 'usr/local/sbin/r8q-kernel-latest'
+	sbin.parent.mkdir(parents=True, exist_ok=True)
+	shutil.copyfile(src / 'r8q-kernel-latest', sbin)
+	sbin.chmod(0o755)
+
+	log = inst.target / LATEST_LOG
+	info(f'r8q: EXPERIMENTAL latest kernel: download, patch and build on the phone (30-60 min; log /{LATEST_LOG})')
+	with open(log, 'w') as out:
+		proc = subprocess.Popen(
+			['arch-chroot', str(inst.target), '/usr/local/sbin/r8q-kernel-latest'],
+			stdout=subprocess.PIPE,
+			stderr=subprocess.STDOUT,
+			text=True,
+		)
+		assert proc.stdout
+		for line in proc.stdout:
+			out.write(line)
+			out.flush()
+			if line.startswith(('== ', '   ', 'r8q-kernel-latest:', 'Nothing was', 'The install')):
+				info('r8q-kernel-latest: ' + line.rstrip())
+		rc = proc.wait()
+
+	if rc != 0:
+		warn(f'r8q: the latest kernel could not be built or installed (log /{LATEST_LOG}); the tested kernel {device.bundled_kernel_release()} stays')
+		return False
+	info('r8q: the latest kernel is installed; the tested one is kept on the ESP (see /usr/local/sbin/r8q-kernel-latest)')
+	return True

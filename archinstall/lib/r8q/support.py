@@ -140,8 +140,29 @@ SWAP = unsupported('not supported: no zram in kernel', 'The r8q kernel has no zr
 
 ENCRYPTION = unsupported('not supported yet', 'The r8q kernel has no dm-crypt, and its boot script cannot unlock a disk.')
 
+# Kernel choices, by the name stored in the configuration's "kernels" list.
+# 'linux-r8q' is the kernel on the medium: the one tested on the phone.
+# 'linux-r8q-latest' is EXPERIMENTAL: it downloads the newest stable kernel from
+# kernel.org, applies the r8q patches and builds it on the phone during the install
+# (install.build_latest_kernel, the script r8q-kernel-latest). Patches written for
+# one kernel version may not apply to the next; if anything fails, linux-r8q stays.
+LATEST_KERNEL = 'linux-r8q-latest'
+
+KERNEL_LABELS: dict[str, str] = {
+	'linux-r8q': 'linux-r8q (tested)',
+	LATEST_KERNEL: 'latest kernel',
+}
+
 KERNELS: dict[str, Support] = {
 	'linux-r8q': TESTED,
+	LATEST_KERNEL: untested(
+		'EXPERIMENTAL: built on the phone',
+		'Downloads the newest stable kernel from kernel.org, applies\n'
+		'the r8q patches and builds it on the phone at the end of the\n'
+		'install (30-60 min, ~2 GB of tools and sources, network).\n'
+		'Patches for one version may not apply to the next: then the\n'
+		'tested linux-r8q stays. r8q-kernel-latest tries again later.',
+	),
 	'linux-aarch64': unsupported('not supported, use linux-r8q'),
 	'linux': unsupported('not supported: x86_64 only'),
 	'linux-lts': unsupported('not supported: x86_64 only'),
@@ -150,6 +171,37 @@ KERNELS: dict[str, Support] = {
 	'linux-rt': unsupported('not supported: x86_64 only'),
 	'linux-rt-lts': unsupported('not supported: x86_64 only'),
 }
+
+def display_msm_support(panel: str | None, has_driver: bool | None) -> Support:
+	"""
+	msm-drm drives the display engine and the panel itself (120 Hz, brightness, real
+	screen-off), but only the S6E3FC3 panel has a driver. The r8q shipped with one of
+	three panels; the bootloader's log says which (device.detected_panel).
+	"""
+	match has_driver:
+		case True:
+			return TESTED
+		case False:
+			return unsupported(
+				f'no {panel.split("_")[0] if panel else "?"} driver',
+				f'This phone has the {panel} panel. Only the\n'
+				'S6E3FC3 has a driver so far; simpledrm works with every panel.',
+			)
+		case None:
+			return untested(
+				'panel unknown',
+				'The bootloader log (LOGFS) could not be read, so the panel\n'
+				'is not known. Only the S6E3FC3 has a driver: on another\n'
+				'panel the screen goes dark after the boot console.',
+			)
+
+
+DISPLAY_SIMPLEDRM = Support(
+	Tier.TESTED,
+	detail='The framebuffer the bootloader lit, kept alive by simpledrm.\n'
+	'Works with every panel, but 60 Hz, no brightness control, no\n'
+	'real screen-off, and every frame is copied by the CPU.',
+)
 
 ROOT_FILESYSTEMS: dict[str, Support] = {
 	'ext4': TESTED,

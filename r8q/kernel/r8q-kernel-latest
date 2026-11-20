@@ -1,0 +1,322 @@
+#!/bin/bash
+# r8q-kernel-latest — EXPERIMENTAL.
+#
+# Build the newest stable mainline kernel for the Samsung Galaxy S20 FE 5G (r8q)
+# ON THE PHONE ITSELF: download it from kernel.org, apply the r8q patches, build it
+# with the configuration of the tested kernel, and install it in place of that one.
+# alarminstall runs this at the end of an install when "latest kernel" is picked;
+# run it again on the installed system to move to a newer release later.
+#
+# Experimental because the r8q patches were written for one kernel version
+# (r8q-arch's patches/) and a newer release may have changed the code they touch.
+# Every step is checked before anything is replaced: if a patch does not apply,
+# the build fails, or a module the phone needs was not built, nothing on the
+# system changes and the tested kernel stays.
+#
+#   r8q-kernel-latest                 newest stable release (kernel.org releases.json)
+#   r8q-kernel-latest --version 7.3.5 a given release
+#   r8q-kernel-latest --patch-only    download and patch, then stop (does it still apply?)
+#   r8q-kernel-latest --no-install    build, but do not touch /boot, /usr/lib/modules, /root/ts
+#   r8q-kernel-latest --keep-build    keep the source and build tree (~2-4 GB) for rebuilds
+#
+# Env: R8Q_SHARE (default /usr/local/share/r8q-kernel: patches, device tree, config,
+#      initramfs, module lists), WORK (default /var/tmp/r8q-kernel), ESP (default /boot),
+#      DESTDIR (default /: where modules and /root/ts go), JOBS (default: all CPUs),
+#      PERF=0 (do not switch the CPUs to the performance governor while building).
+#
+# Rolling back to the tested kernel (also from a PC in mass-storage mode, or from
+# the alarminstall card's shell, if the new kernel does not boot):
+#   ESP:  EFI/BOOT/BOOTAA64-tested-<ver>.efi -> EFI/BOOT/BOOTAA64.EFI (systemd-boot:
+#         Image-tested-<ver> -> Image), r8q-tested-<ver>.dtb -> r8q.dtb
+#   root: rm -rf /root/ts && mv /root/ts-tested-<ver> /root/ts
+# Its modules stay in /usr/lib/modules/<ver>: the new kernel uses its own directory
+# (release "<ver>-latest").
+#
+# Works on a PC too (cross build with clang, for testing): ARCH=arm64 LLVM=1 is set
+# whenever this is not an aarch64 machine.
+set -euo pipefail
+
+R8Q_SHARE=${R8Q_SHARE:-/usr/local/share/r8q-kernel}
+WORK=${WORK:-/var/tmp/r8q-kernel}
+ESP=${ESP:-/boot}
+DESTDIR=${DESTDIR:-}
+JOBS=${JOBS:-$(nproc)}
+LOCALVERSION=-latest
+CONF=${R8Q_KERNEL_CONF:-/etc/r8q-kernel.conf}
+
+VERSION= PATCH_ONLY=0 INSTALL=1 KEEP=0
+while [ $# -gt 0 ]; do
+    case $1 in
+        --version) VERSION=$2; shift ;;
+        --patch-only) PATCH_ONLY=1 ;;
+        --no-install) INSTALL=0 ;;
+        --keep-build) KEEP=1 ;;
+        -h|--help) sed -n '2,36p' "$0"; exit 0 ;;
+        *) echo "unknown argument: $1" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+log() { echo "== $(date +%T) $*"; }
+INSTALLING=0
+die() {
+    echo "r8q-kernel-latest: FAILED: $*" >&2
+    if [ "$INSTALLING" = 0 ]; then
+        echo "Nothing was changed: the installed kernel stays." >&2
+    else
+        echo "The install was cut short: roll back to the tested kernel (top of $0)." >&2
+    fi
+    exit 1
+}
+
+# R8Q_DISPLAY (msm or simpledrm) and TESTED_KERNEL, written by alarminstall.
+R8Q_DISPLAY=msm TESTED_KERNEL=
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+DISPLAY_MODE=$R8Q_DISPLAY
+
+for f in patches dts config irfs irfs.devnodes modules.installed modules.ts; do
+    [ -e "$R8Q_SHARE/$f" ] || die "$R8Q_SHARE/$f is missing"
+done
+
+MAKE_ARGS=()
+if [ "$(uname -m)" != aarch64 ]; then MAKE_ARGS+=(ARCH=arm64); fi
+if command -v clang >/dev/null && command -v ld.lld >/dev/null; then MAKE_ARGS+=(LLVM=1); fi
+missing=
+for t in make bc flex bison perl python3 curl xz depmod patch; do command -v $t >/dev/null || missing="$missing $t"; done
+grep -q 'LLVM=1' <<<"${MAKE_ARGS[*]}" || command -v gcc >/dev/null || missing="$missing clang/gcc"
+[ -z "$missing" ] || die "missing tools:$missing (pacman -S --needed base-devel bc clang lld llvm python perl openssl libelf curl)"
+
+mkdir -p "$WORK"
+cd "$WORK"
+
+# --- which release ---------------------------------------------------------------
+if [ -z "$VERSION" ]; then
+    VERSION=$(curl -fsS --retry 3 https://www.kernel.org/releases.json |
+        python3 -c 'import json, sys; print(json.load(sys.stdin)["latest_stable"]["version"])') ||
+        die "cannot read the newest version from kernel.org"
+fi
+case $VERSION in [0-9]*.[0-9]*) ;; *) die "odd version '$VERSION'" ;; esac
+MAJOR=${VERSION%%.*}
+URL=https://cdn.kernel.org/pub/linux/kernel/v$MAJOR.x
+SRC=$WORK/linux-$VERSION
+OUT=$WORK/out-$VERSION
+BUILDLOG=$WORK/build-$VERSION.log
+log "Linux $VERSION for the r8q (EXPERIMENTAL; tested kernel: ${TESTED_KERNEL:-unknown}, display: $DISPLAY_MODE)"
+
+# --- download and verify -----------------------------------------------------------
+curl -fsS --retry 3 -o sha256sums.asc "$URL/sha256sums.asc" || die "cannot download $URL/sha256sums.asc"
+# kernel.org signs the checksum list. Check the signature when the key can be had
+# (WKD): a BAD signature stops here; no key, or another key, only warns.
+if command -v gpg >/dev/null; then
+    export GNUPGHOME=$WORK/gnupg; mkdir -p -m700 "$GNUPGHOME"
+    gpg -q --auto-key-locate clear,wkd --locate-keys autosigner@kernel.org >/dev/null 2>&1 || true
+    sig=$(gpg --status-fd 1 --verify sha256sums.asc 2>/dev/null || true)
+    if grep -q '^\[GNUPG:\] BADSIG' <<<"$sig"; then
+        die "sha256sums.asc: BAD signature"
+    elif grep -q '^\[GNUPG:\] GOODSIG' <<<"$sig"; then
+        log "sha256sums.asc: good kernel.org signature"
+    else
+        echo "warning: could not check kernel.org's signature, checking the sha256 only" >&2
+    fi
+fi
+grep -q " linux-$VERSION.tar.xz\$" sha256sums.asc || die "linux-$VERSION.tar.xz is not in kernel.org's checksum list"
+tarball_ok() { [ -s "linux-$VERSION.tar.xz" ] && grep " linux-$VERSION.tar.xz\$" sha256sums.asc | sha256sum -c --quiet - >/dev/null 2>&1; }
+if tarball_ok; then
+    log "linux-$VERSION.tar.xz already here"
+else
+    log "download linux-$VERSION.tar.xz (~150 MB)"
+    for try in 1 2 3 4 5 6; do
+        # resumes a partial file; a file that is complete but wrong starts over
+        curl -fsS -C - -o "linux-$VERSION.tar.xz" "$URL/linux-$VERSION.tar.xz" || true
+        tarball_ok && break
+        [ $try = 3 ] && rm -f "linux-$VERSION.tar.xz"
+        [ $try = 6 ] && die "linux-$VERSION.tar.xz: download failed or checksum mismatch"
+        sleep 5
+    done
+fi
+
+log "unpack"
+rm -rf "$SRC" "$OUT"
+tar -xf "linux-$VERSION.tar.xz"
+
+# --- the r8q patches ---------------------------------------------------------------
+log "r8q patches"
+cd "$SRC"
+cp "$R8Q_SHARE/patches/fts5cu56a.c" drivers/input/touchscreen/
+for p in "$R8Q_SHARE"/patches/*.patch; do
+    name=$(basename "$p")
+    if patch -p1 -R -s -f --dry-run < "$p" >/dev/null 2>&1; then
+        echo "   $name: already in $VERSION, skipped"
+    elif out=$(patch -p1 -N -s -f -F3 --dry-run < "$p" 2>&1); then
+        patch -p1 -N -s -f -F3 --no-backup-if-mismatch < "$p" >/dev/null
+        echo "   $name: applied"
+    else
+        echo "$out" | head -20 >&2
+        die "$name does not apply to $VERSION (the code it changes has moved on)"
+    fi
+done
+# The device tree: complete r8q files (upstream + the r8q additions), replacing upstream's.
+cp "$R8Q_SHARE"/dts/*.dts "$R8Q_SHARE"/dts/*.dtsi arch/arm64/boot/dts/qcom/
+[ "$PATCH_ONLY" = 1 ] && { log "--patch-only: $SRC is patched"; exit 0; }
+
+# --- configuration -------------------------------------------------------------------
+# The tested kernel's configuration; options new in $VERSION get their defaults.
+log "configuration (from the tested kernel's)"
+mkdir -p "$OUT"
+cp "$R8Q_SHARE/config" "$OUT/.config"
+cfg() { scripts/config --file "$OUT/.config" "$@"; }
+cfg --set-str INITRAMFS_SOURCE "$R8Q_SHARE/irfs $R8Q_SHARE/irfs.devnodes"
+cfg --set-str LOCALVERSION "$LOCALVERSION"
+# No debug info: the build is several times faster and smaller; the code is the same.
+cfg -d DEBUG_INFO -d DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT -d DEBUG_INFO_DWARF4 -d DEBUG_INFO_DWARF5 -e DEBUG_INFO_NONE
+make -s -C "$SRC" O="$OUT" "${MAKE_ARGS[@]}" olddefconfig >>"$BUILDLOG" 2>&1 || die "olddefconfig (log: $BUILDLOG)"
+# Only build the modules the phone installs (r8q's list + their dependencies): the
+# others are never put on the phone (cold-plugging the full set hard-resets the SoC).
+# localmodconfig keeps everything built in and turns the other modules off.
+{
+    echo "Module                  Size  Used by"
+    cat "$R8Q_SHARE/modules.wanted" 2>/dev/null || true
+    grep -hv '^#' "$R8Q_SHARE/modules.installed" "$R8Q_SHARE/modules.ts"
+} | awk 'NR == 1 { print; next } NF { gsub(/-/, "_", $1); print $1 " 16384 0" }' > "$WORK/lsmod"
+make -s -C "$SRC" O="$OUT" "${MAKE_ARGS[@]}" LSMOD="$WORK/lsmod" localmodconfig </dev/null >>"$BUILDLOG" 2>&1 ||
+    die "localmodconfig (log: $BUILDLOG)"
+make -s -C "$SRC" O="$OUT" "${MAKE_ARGS[@]}" olddefconfig >>"$BUILDLOG" 2>&1 || die "olddefconfig (log: $BUILDLOG)"
+KREL=$(make -s -C "$SRC" O="$OUT" "${MAKE_ARGS[@]}" kernelrelease)
+log "release $KREL, $(grep -c '=m$' "$OUT/.config") modules configured"
+
+# --- build ---------------------------------------------------------------------------
+# The CPU-wedge bug (r8q-arch INSTALLATION §11) has hit long builds on this phone.
+# Its leading theory is a CPU frequency change that never completes, so the build
+# runs with fixed frequencies (performance governor); the old governors come back
+# afterwards.
+GOVS=
+restore_govs() { for g in $GOVS; do echo "${g#*:}" > "${g%%:*}/scaling_governor" 2>/dev/null || true; done; }
+if [ "${PERF:-1}" = 1 ] && [ "$(uname -m)" = aarch64 ]; then
+    for p in /sys/devices/system/cpu/cpufreq/policy*; do
+        [ -w "$p/scaling_governor" ] || continue
+        GOVS="$GOVS $p:$(cat "$p/scaling_governor")"
+        echo performance > "$p/scaling_governor" 2>/dev/null || true
+    done
+    trap restore_govs EXIT
+fi
+log "build with $JOBS jobs (on the phone: about 30-60 minutes; log: $BUILDLOG)"
+DTBS="qcom/sm8250-samsung-r8q.dtb qcom/sm8250-samsung-r8q-simpledrm.dtb"
+# shellcheck disable=SC2086
+if ! make -C "$SRC" O="$OUT" "${MAKE_ARGS[@]}" -j"$JOBS" Image modules $DTBS >>"$BUILDLOG" 2>&1; then
+    grep -E 'error|Error' "$BUILDLOG" | tail -15 >&2
+    die "the build failed (log: $BUILDLOG)"
+fi
+
+# --- check: every module the phone needs was built -------------------------------------
+log "modules"
+MODS=$WORK/mods-$VERSION
+rm -rf "$MODS"
+make -s -C "$SRC" O="$OUT" "${MAKE_ARGS[@]}" INSTALL_MOD_PATH="$MODS" INSTALL_MOD_STRIP=1 modules_install >>"$BUILDLOG" 2>&1 ||
+    die "modules_install (log: $BUILDLOG)"
+MDIR=$MODS/lib/modules/$KREL
+# The modules in modules.installed and everything they need (modules.dep), as paths.
+closure() {
+    awk -v want="$(grep -hv '^#' "$R8Q_SHARE/modules.installed" | tr '\n-' ' _')" '
+        BEGIN { n = split(want, w, " "); for (i = 1; i <= n; i++) if (w[i] != "") need[w[i]] = 1 }
+        {
+            mod = $1; sub(/:$/, "", mod)
+            name = mod; sub(/.*\//, "", name); sub(/\.ko.*/, "", name); gsub(/-/, "_", name)
+            path[name] = mod; deps[mod] = ""
+            for (i = 2; i <= NF; i++) deps[mod] = deps[mod] " " $i
+        }
+        END {
+            for (n in need) {
+                if (!(n in path)) { print "MISSING " n; continue }
+                stack[++sp] = path[n]
+            }
+            while (sp > 0) {
+                m = stack[sp--]
+                if (m in seen) continue
+                seen[m] = 1; print m
+                k = split(deps[m], d, " ")
+                for (i = 1; i <= k; i++) stack[++sp] = d[i]
+            }
+        }' "$MDIR/modules.dep"
+}
+# A listed module may rightly be absent from the trimmed build: a hidden library
+# symbol (no prompt, only ever "select"ed, e.g. snd-pcm-dmaengine) that no remaining
+# driver selects is needed by nothing in this kernel. Anything a user can switch on
+# (a prompt in Kconfig) must have been built, or this is not the kernel the phone needs.
+hidden_lib() {
+    local pat=${1//_/[-_]} sym
+    sym=$(grep -rhE --include=Makefile "obj-\\\$\(CONFIG_[A-Z0-9_]+\)[[:space:]]*\+=.*(^|[[:space:]])$pat\.o" "$SRC" |
+        grep -oE 'CONFIG_[A-Z0-9_]+' | head -1)
+    [ -n "$sym" ] || return 1
+    ! find "$SRC" -name 'Kconfig*' -exec awk -v sym="${sym#CONFIG_}" '
+        $1 ~ /^(config|menuconfig|choice|endchoice|menu|endmenu|if|endif|comment|source|mainmenu)$/ {
+            insym = (($1 == "config" || $1 == "menuconfig") && $2 == sym); next }
+        insym && /^[[:space:]]*(bool|tristate|string|int|hex)[[:space:]]+"/ { print "PROMPT" }
+        insym && /^[[:space:]]*prompt[[:space:]]/ { print "PROMPT" }' {} + | grep -q PROMPT
+}
+LIST=$(closure)
+missing=
+for m in $(grep '^MISSING ' <<<"$LIST" | cut -d' ' -f2); do
+    if hidden_lib "$m"; then
+        echo "   $m: not needed by this build (a library nothing selects any more)"
+    else
+        missing="$missing $m"
+    fi
+done
+[ -z "$missing" ] || die "modules not built for $KREL:$missing"
+LIST=$(grep -v '^MISSING ' <<<"$LIST")
+TS=()
+while read -r n; do
+    [ -z "$n" ] || [ "${n#\#}" != "$n" ] && continue
+    f=$(find "$MDIR/kernel" -name "$n.ko*" | head -1)
+    [ -n "$f" ] || die "module $n (loaded from /root/ts) was not built"
+    TS+=("$f")
+done < "$R8Q_SHARE/modules.ts"
+IMAGE=$OUT/arch/arm64/boot/Image
+DTB_MSM=$OUT/arch/arm64/boot/dts/qcom/sm8250-samsung-r8q.dtb
+DTB_SIMPLEDRM=$OUT/arch/arm64/boot/dts/qcom/sm8250-samsung-r8q-simpledrm.dtb
+for f in "$IMAGE" "$DTB_MSM" "$DTB_SIMPLEDRM"; do [ -s "$f" ] || die "$f was not built"; done
+[ "$DISPLAY_MODE" = simpledrm ] && DTB=$DTB_SIMPLEDRM || DTB=$DTB_MSM
+log "built: Image $(du -h "$IMAGE" | cut -f1), $(wc -l <<<"$LIST") + ${#TS[@]} modules, $(basename "$DTB")"
+
+if [ "$INSTALL" = 0 ]; then
+    log "--no-install: built in $OUT"
+    exit 0
+fi
+
+# --- install -------------------------------------------------------------------------
+log "install $KREL"
+mountpoint -q "$ESP" 2>/dev/null || [ -n "$DESTDIR" ] || die "$ESP (the ESP) is not mounted"
+TAG=tested-${TESTED_KERNEL:-previous}
+# EFISTUB: the firmware starts the kernel as EFI/BOOT/BOOTAA64.EFI; systemd-boot: /Image.
+if [ -e "$ESP/loader/entries/r8q.conf" ]; then
+    KIMG=$ESP/Image; KBAK=$ESP/Image-$TAG
+else
+    KIMG=$ESP/EFI/BOOT/BOOTAA64.EFI; KBAK=$ESP/EFI/BOOT/BOOTAA64-$TAG.efi
+fi
+[ -e "$KIMG" ] || die "$KIMG (the kernel the phone boots) not found"
+INSTALLING=1
+# Keep the tested kernel once: later runs replace only the "latest" one.
+[ -e "$KBAK" ] || { cp "$KIMG" "$KBAK"; cp "$ESP/r8q.dtb" "$ESP/r8q-$TAG.dtb"; }
+[ -d "$DESTDIR/root/ts-$TAG" ] || cp -a "$DESTDIR/root/ts" "$DESTDIR/root/ts-$TAG"
+
+MD=$DESTDIR/usr/lib/modules/$KREL
+rm -rf "$MD"; mkdir -p "$MD"
+cp "$MDIR"/modules.{order,builtin,builtin.modinfo} "$MD/"
+while read -r m; do install -D -m644 "$MDIR/$m" "$MD/$m"; done <<<"$LIST"
+depmod ${DESTDIR:+-b "$DESTDIR"} "$KREL"
+rm -rf "$DESTDIR/root/ts.new"; mkdir -p "$DESTDIR/root/ts.new"
+for f in "${TS[@]}"; do install -m644 "$f" "$DESTDIR/root/ts.new/$(basename "${f%.zst}")"; done
+rm -rf "$DESTDIR/root/ts"; mv "$DESTDIR/root/ts.new" "$DESTDIR/root/ts"
+# The kernel and its device tree last, each written then renamed: a power cut never
+# leaves a half-written kernel on the ESP.
+cp "$DTB" "$ESP/r8q.dtb.new" && mv "$ESP/r8q.dtb.new" "$ESP/r8q.dtb"
+cp "$IMAGE" "$KIMG.new" && mv "$KIMG.new" "$KIMG"
+sync
+echo "$KREL" > "$WORK/installed"
+log "installed $KREL (the tested kernel is kept as $(basename "$KBAK"); rollback: see the top of $0)"
+
+if [ "$KEEP" = 0 ]; then
+    rm -rf "$SRC" "$OUT" "$MODS" "$WORK/linux-$VERSION.tar.xz"
+fi
+log "done: reboot to start $KREL"

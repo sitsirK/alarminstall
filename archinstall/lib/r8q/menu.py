@@ -11,16 +11,20 @@ from archinstall.lib.menu.helpers import Confirmation, Notify, Selection
 from archinstall.lib.models.application import ApplicationConfiguration
 from archinstall.lib.models.package_types import FirmwareOptdep
 from archinstall.lib.r8q import device
-from archinstall.lib.r8q.models import R8qBootloader, R8qConfiguration, TouchChip
+from archinstall.lib.r8q.models import Display, R8qBootloader, R8qConfiguration, TouchChip
 from archinstall.lib.r8q.support import (
 	APPLICATIONS,
+	DISPLAY_SIMPLEDRM,
 	ENCRYPTION,
+	KERNEL_LABELS,
 	KERNELS,
+	LATEST_KERNEL,
 	ROOT_FILESYSTEMS,
 	SWAP,
 	TESTED,
 	Support,
 	apply_tiers,
+	display_msm_support,
 	unsupported,
 	untested,
 )
@@ -78,6 +82,13 @@ class R8qMenu(AbstractSubMenu[R8qConfiguration]):
 				),
 				preview_action=lambda i: f'GPU acceleration: {yn(i.value)}',
 				key='gpu',
+			),
+			MenuItem(
+				'Display',
+				value=c.display,
+				action=select_display,
+				preview_action=_prev_display,
+				key='display',
 			),
 			MenuItem(
 				'Touchscreen',
@@ -153,6 +164,47 @@ class R8qMenu(AbstractSubMenu[R8qConfiguration]):
 		]
 
 
+def default_display() -> Display:
+	"""msm-drm where the panel has a driver, simpledrm everywhere else."""
+	return Display.MSM if device.panel_has_driver(device.detected_panel()) else Display.SIMPLEDRM
+
+
+def _display_support(display: Display) -> Support:
+	if display == Display.SIMPLEDRM:
+		return DISPLAY_SIMPLEDRM
+	panel = device.detected_panel()
+	return display_msm_support(panel, device.panel_has_driver(panel))
+
+
+def _prev_display(item: MenuItem) -> str:
+	display: Display = item.value
+	panel = device.detected_panel() or 'not detected'
+	text = f'Display: {display.display()}\n\nThis phone\'s panel: {panel}'
+	if detail := _display_support(display).detail:
+		text += f'\n\n{detail}'
+	if display == Display.MSM:
+		text += '\n\nmsm-drm is tested with Plasma Mobile; Sway and GNOME on it are untested.'
+	return text
+
+
+async def select_display(preset: Display) -> Display:
+	items = [tiered_item(d.display(), d, _display_support(d)) for d in Display]
+	group = MenuItemGroup(items, sort_items=False)
+	group.set_focus_by_value(preset)
+
+	panel = device.detected_panel()
+	header = (
+		'msm-drm: Linux drives the screen: 120 Hz,\n'
+		'brightness, screen-off. S6E3FC3 panel only.\n'
+		"simpledrm: the bootloader's picture, any panel.\n"
+		f'This phone: {panel or "panel not detected"}\n'
+	)
+	result = await Selection[Display](group, header=header, allow_skip=True, preview_location='bottom').show()
+	if result.type_ == ResultType.Selection and isinstance(result.get_value(), Display):
+		return result.get_value()
+	return preset
+
+
 def _prev_touch(item: MenuItem) -> str:
 	chip: TouchChip = item.value
 	found = device.detected_touch_chip() or 'none detected'
@@ -181,23 +233,30 @@ async def select_touch(preset: TouchChip) -> TouchChip:
 # --- Tiered replacements for archinstall's own choices --------------------------
 
 
-async def select_kernel(_preset: list[str] | None = None) -> list[str]:
-	items = [tiered_item(name, name, support) for name, support in KERNELS.items()]
+async def select_kernel(preset: list[str] | None = None) -> list[str]:
+	"""
+	linux-r8q, the tested kernel on the medium, or the EXPERIMENTAL "latest kernel":
+	the newest stable kernel from kernel.org, patched and built on the phone during
+	the install (see support.LATEST_KERNEL and install.build_latest_kernel).
+	"""
+	items = [tiered_item(KERNEL_LABELS.get(name, name), name, support) for name, support in KERNELS.items()]
 	group = MenuItemGroup(items, sort_items=False)
-	group.set_selected_by_value(['linux-r8q'])
-	group.set_focus_by_value('linux-r8q')
+	current = LATEST_KERNEL if preset and LATEST_KERNEL in preset else 'linux-r8q'
+	group.set_focus_by_value(current)
 
 	result = await Selection[str](
 		group,
-		header='Only linux-r8q (mainline 7.1.2 + r8q patches)\nboots this phone.\n',
+		header=f'linux-r8q: mainline {device.bundled_kernel_release()} + r8q patches,\n'
+		'tested on this phone. latest kernel\n'
+		'(EXPERIMENTAL): the newest kernel.org\n'
+		'release, patched and built on the phone.\n',
 		allow_skip=True,
-		multi=True,
 		preview_location='bottom',
 	).show()
 
-	if result.type_ == ResultType.Selection and result.get_values():
-		return result.get_values()
-	return ['linux-r8q']
+	if result.type_ == ResultType.Selection and result.get_value() in KERNEL_LABELS:
+		return [result.get_value()]
+	return [current]
 
 
 BOOTLOADER_NOTE = unsupported(

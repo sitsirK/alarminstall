@@ -56,6 +56,16 @@ Choices are marked in the menus: plain = tested on the phone, yellow = untested,
 red and struck through = not supported yet (cannot be selected). The table is
 `archinstall/lib/r8q/support.py`.
 
+- **Phone → Display**: *msm-drm* (Linux drives the display: 120 Hz, brightness,
+  real screen-off) needs the S6E3FC3 panel; the installer reads which of the
+  r8q's three panels yours is from the bootloader's log and picks for you.
+  *simpledrm* keeps the picture the bootloader set up (60 Hz, any panel).
+- **Kernels → latest kernel** (experimental): at the end of the install the phone
+  downloads the newest stable kernel from kernel.org, applies the r8q patches and
+  builds it itself (30-60 minutes, needs the network). If a patch no longer
+  applies or the build fails, the tested kernel stays. `r8q-kernel-latest` on the
+  installed system tries again later; how to roll back is at the top of that script.
+
 ## Building
 
 `r8q/iso/build.sh all`. The kernel is cross-built on a PC (r8q-arch's kernel

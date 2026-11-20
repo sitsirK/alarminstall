@@ -20,6 +20,18 @@ class TouchChip(Enum):
 				return 'Zinitix ZT7650'
 
 
+class Display(Enum):
+	MSM = 'msm'
+	SIMPLEDRM = 'simpledrm'
+
+	def display(self) -> str:
+		match self:
+			case Display.MSM:
+				return 'msm-drm (120 Hz, brightness)'
+			case Display.SIMPLEDRM:
+				return 'simpledrm (60 Hz, any panel)'
+
+
 class R8qBootloader(Enum):
 	EFISTUB = 'efistub'
 	SYSTEMD_BOOT = 'systemd-boot'
@@ -37,6 +49,7 @@ class R8qConfiguration(SubConfig):
 	"""Options specific to the Samsung Galaxy S20 FE 5G (r8q)."""
 
 	gpu: bool = True
+	display: Display = Display.MSM
 	touch: TouchChip = TouchChip.AUTO
 	camera: bool = False
 	usb_ssh: bool = True
@@ -52,6 +65,7 @@ class R8qConfiguration(SubConfig):
 	def json(self) -> dict[str, Any]:
 		return {
 			'gpu': self.gpu,
+			'display': self.display.value,
 			'touch': self.touch.value,
 			'camera': self.camera,
 			'usb_ssh': self.usb_ssh,
@@ -67,6 +81,7 @@ class R8qConfiguration(SubConfig):
 		default = cls()
 		return cls(
 			gpu=arg.get('gpu', default.gpu),
+			display=Display(arg.get('display', default.display.value)),
 			touch=TouchChip(arg.get('touch', default.touch.value)),
 			camera=arg.get('camera', default.camera),
 			usb_ssh=arg.get('usb_ssh', default.usb_ssh),
@@ -84,6 +99,7 @@ class R8qConfiguration(SubConfig):
 
 		return [
 			f'GPU acceleration: {yn(self.gpu)}',
+			f'Display: {self.display.display()}',
 			f'Touchscreen: {self.touch.display()}',
 			f'Camera: {yn(self.camera)}',
 			f'SSH over USB: {yn(self.usb_ssh)}',
