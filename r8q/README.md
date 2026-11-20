@@ -6,11 +6,11 @@ archinstall, and installs Arch Linux ARM with the r8q kernel onto the phone.
 ## What you need
 
 - A Galaxy S20 FE 5G (Snapdragon 865, codename r8q) with an unlocked bootloader.
-- **Mu-Silicium with SD-card support** on `BOOT`, built from
-  [sitsirK/Mu-Silicium](https://github.com/sitsirK/Mu-Silicium): branch
-  `sd-card-power` makes the card visible, `sd-card-boot-option` adds the
-  "SD Card" boot-menu entry. Upstream Mu-Silicium does not see the SD card on
-  this phone.
+- **Mu-Silicium with SD-card support** on `BOOT`: the `r8q` branch of
+  [sitsirK/Mu-Silicium](https://github.com/sitsirK/Mu-Silicium/tree/r8q), ready
+  to build ([r8q-arch INSTALLATION §0](https://github.com/sitsirK/r8q-arch/blob/main/INSTALLATION.md#0-the-alarminstall-image)).
+  It powers the SD slot and adds an "SD Card" boot-menu entry; upstream
+  Mu-Silicium does not see the SD card on this phone.
 - A microSD card, Wi-Fi, and for typing the Wi-Fi password: a PC with a USB cable.
 
 ## Using it
